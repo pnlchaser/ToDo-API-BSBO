@@ -1,15 +1,15 @@
 from fastapi import APIRouter
-from routers.tasks import tasks_db
+from database import tasks_db
 
 router = APIRouter(
-    prefix="/tasks",
+    prefix="/stats",
     tags=["stats"]
 )
 
 
-@router.get("/stats")
+@router.get("", response_model=dict)
 async def get_tasks_stats() -> dict:
-    """Получение статистики по задачам"""
+    """Получить статистику по задачам"""
     stats = {
         "total_tasks": len(tasks_db),
         "by_quadrant": {"Q1": 0, "Q2": 0, "Q3": 0, "Q4": 0},

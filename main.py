@@ -8,9 +8,9 @@ app = FastAPI(
     contact={"name": "Чистяков Сергей"}
 )
 
-# Подключаем роутеры
-app.include_router(tasks.router)
-app.include_router(stats.router)
+# Подключаем роутеры с префиксом /api/v1
+app.include_router(tasks.router, prefix="/api/v1")
+app.include_router(stats.router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -23,6 +23,3 @@ async def root() -> dict:
         "api_description": app.description,
         "api_author": app.contact["name"]
     }
-@app.post("/tasks")
-async def create_task(task: dict):
-    return {"message": "Task created", "task": task}
