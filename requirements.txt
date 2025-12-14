@@ -1,5 +1,5 @@
 # Зависимости
 fastapi==0.119.0
 pydantic==2.12.0
-unicorn==2.1.4
 uvicorn==0.37.0
+APScheduler==3.10.4

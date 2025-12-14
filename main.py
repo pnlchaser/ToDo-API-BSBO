@@ -4,6 +4,7 @@ from database import init_db, get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from routers import tasks, stats
+from scheduler import start_scheduler
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -12,6 +13,11 @@ async def lifespan(app: FastAPI):
     print(" Инициализация базы данных...")
     # Создаем таблицы (если их нет)
     await init_db()
+    # Запускаем планировщик задач (обновление срочности)
+    try:
+        start_scheduler()
+    except Exception as e:
+        print(f"Не удалось запустить планировщик: {e}")
     print(" Приложение готово к работе!")
     yield # Здесь приложение работает
     # Код ПОСЛЕ yield выполняется при ОСТАНОВКЕ
@@ -19,7 +25,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ToDo лист API",
     description="API для управления задачами с использованием матрицы Эйзенхауэра",
-    version="2.0.0",
+    version="2.1.0",
     contact={
         "name": "Чистяков",
     },

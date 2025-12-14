@@ -36,7 +36,7 @@ class Task(Base):
 
     deadline_at = Column(
         DateTime(timezone=True),
-        nullable=False
+        nullable=True
     )
     
     quadrant = Column(

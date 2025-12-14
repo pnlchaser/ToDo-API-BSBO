@@ -3,11 +3,12 @@ from fastapi import APIRouter, HTTPException, Depends, Query, status
 from typing import List, Optional
 from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from schemas import TaskCreate, TaskUpdate, TaskResponse
 from models import Task
 from database import get_async_session
+from utils import calculate_urgency, calculate_days_until_deadline, determine_quadrant
 
 router = APIRouter(
     prefix="/tasks",
@@ -15,38 +16,7 @@ router = APIRouter(
     responses={404: {"description": "Task not found"}},
 )
 
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-def calculate_urgency(deadline: Optional[datetime]) -> bool:
-    """Определяет срочность: True если до дедлайна <= 3 дня"""
-    if not deadline:
-        return False
-    # Преобразуем datetime в date для сравнения
-    deadline_date = deadline.date() if isinstance(deadline, datetime) else deadline
-    today = date.today()
-    days_left = (deadline_date - today).days
-    return days_left <= 3
-
-def determine_quadrant(is_important: bool, deadline: Optional[datetime]) -> str:
-    """Определяет квадрант на основе важности и дедлайна"""
-    is_urgent = calculate_urgency(deadline)
-    
-    if is_important and is_urgent:
-        return "Q1"
-    elif is_important and not is_urgent:
-        return "Q2"
-    elif not is_important and is_urgent:
-        return "Q3"
-    else:
-        return "Q4"
-
-def calculate_days_until_deadline(deadline: Optional[datetime]) -> Optional[int]:
-    """Рассчитывает дни до дедлайна"""
-    if not deadline:
-        return None
-    # Преобразуем datetime в date для сравнения
-    deadline_date = deadline.date() if isinstance(deadline, datetime) else deadline
-    today = date.today()
-    return (deadline_date - today).days
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ вынесены в `utils.py`
 
 def task_to_response(task: Task) -> TaskResponse:
     """Конвертирует SQLAlchemy модель в Pydantic схему (вычисляемые поля будут добавлены схемой)."""
@@ -100,6 +70,16 @@ async def search_tasks(
     if not tasks:
         raise HTTPException(status_code=404, detail="По данному запросу ничего не найдено")
     
+    return [task_to_response(task) for task in tasks]
+
+
+# GET ЗАДАЧИ, срок которых истекает сегодня
+@router.get("/today", response_model=List[TaskResponse])
+async def get_tasks_due_today(db: AsyncSession = Depends(get_async_session)):
+    """Возвращает задачи, у которых дедлайн — сегодня (по дате)."""
+    today = date.today()
+    result = await db.execute(select(Task).where(func.date(Task.deadline_at) == today))
+    tasks = result.scalars().all()
     return [task_to_response(task) for task in tasks]
 
 # GET ЗАДАЧИ ПО СТАТУСУ

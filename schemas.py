@@ -19,9 +19,9 @@ class TaskBase(BaseModel):
         ...,
         description="Важность задачи"
     )
-    deadline_at: datetime = Field(
-        ...,
-        description="Плановый дедлайн задачи"
+    deadline_at: Optional[datetime] = Field(
+        None,
+        description="Плановый дедлайн задачи (опционально)"
     )
 
 # Схема для создания новой задачи
@@ -75,12 +75,49 @@ class TaskResponse(TaskBase):
         description="Дата и время создания задачи"
     )
     
-    @computed_field(return_type=int)
-    def days_to_deadline(self) -> int:
-        """Расчет количества дней от сегодняшней даты до дедлайна."""
-        now = datetime.now(self.deadline_at.tzinfo) if self.deadline_at.tzinfo else datetime.now()
+    @computed_field(return_type=Optional[int])
+    def days_to_deadline(self) -> Optional[int]:
+        """Расчет количества полных дней от текущего UTC-времени до дедлайна."""
+        if not self.deadline_at:
+            return None
+        # Если deadline_at — datetime без tzinfo, считаем его в UTC
+        try:
+            tz = self.deadline_at.tzinfo
+        except Exception:
+            tz = None
+        now = datetime.now(tz) if tz else datetime.utcnow()
         delta = self.deadline_at.date() - now.date()
         return delta.days
+
+    @computed_field(return_type=Optional[str])
+    def status_message(self) -> Optional[str]:
+        """Возвращает статус просрочена/в срок/нет дедлайна на основе days_to_deadline."""
+        days = self.days_to_deadline
+        if days is None:
+            return None
+        return "overdue" if days < 0 else "on time"
     
+    class Config:
+        from_attributes = True
+
+
+class TimingStatsResponse(BaseModel):
+    completed_on_time: int = Field(
+        ...,
+        description="Количество задач, завершенных в срок"
+    )
+    completed_late: int = Field(
+        ...,
+        description="Количество задач, завершенных с нарушением сроков"
+    )
+    on_plan_pending: int = Field(
+        ...,
+        description="Количество задач в работе, выполняемых в соответствии с планом"
+    )
+    overtime_pending: int = Field(
+        ...,
+        description="Количество просроченных незавершенных задач"
+    )
+
     class Config:
         from_attributes = True
