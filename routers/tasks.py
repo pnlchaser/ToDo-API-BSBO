@@ -6,9 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from schemas import TaskCreate, TaskUpdate, TaskResponse
-from models import Task
+from models import Task, User, UserRole
 from database import get_async_session
 from utils import calculate_urgency, calculate_days_until_deadline, determine_quadrant
+from dependencies import get_current_user
 
 router = APIRouter(
     prefix="/tasks",
@@ -33,8 +34,15 @@ def task_to_response(task: Task) -> TaskResponse:
 
 # GET ВСЕ ЗАДАЧИ
 @router.get("/", response_model=List[TaskResponse])
-async def get_all_tasks(db: AsyncSession = Depends(get_async_session)):
-    result = await db.execute(select(Task))
+async def get_all_tasks(
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
+):
+    # Admins see all tasks; regular users see only their tasks
+    if current_user.role == UserRole.ADMIN:
+        result = await db.execute(select(Task))
+    else:
+        result = await db.execute(select(Task).where(Task.user_id == current_user.id))
     tasks = result.scalars().all()
     return [task_to_response(task) for task in tasks]
 
@@ -43,12 +51,18 @@ async def get_all_tasks(db: AsyncSession = Depends(get_async_session)):
 @router.get("/quadrant/{quadrant}", response_model=List[TaskResponse])
 async def get_tasks_by_quadrant(
     quadrant: str,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     if quadrant not in ["Q1", "Q2", "Q3", "Q4"]:
         raise HTTPException(status_code=400, detail="Неверный квадрант. Используйте: Q1, Q2, Q3, Q4")
     
-    result = await db.execute(select(Task).where(Task.quadrant == quadrant))
+    if current_user.role == UserRole.ADMIN:
+        result = await db.execute(select(Task).where(Task.quadrant == quadrant))
+    else:
+        result = await db.execute(
+            select(Task).where((Task.quadrant == quadrant) & (Task.user_id == current_user.id))
+        )
     tasks = result.scalars().all()
     return [task_to_response(task) for task in tasks]
 
@@ -56,15 +70,16 @@ async def get_tasks_by_quadrant(
 @router.get("/search", response_model=List[TaskResponse])
 async def search_tasks(
     q: str = Query(..., min_length=2),
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     keyword = f"%{q.lower()}%"
-    result = await db.execute(
-        select(Task).where(
-            (Task.title.ilike(keyword)) |
-            (Task.description.ilike(keyword))
-        )
+    stmt = select(Task).where(
+        (Task.title.ilike(keyword)) | (Task.description.ilike(keyword))
     )
+    if current_user.role != UserRole.ADMIN:
+        stmt = stmt.where(Task.user_id == current_user.id)
+    result = await db.execute(stmt)
     tasks = result.scalars().all()
     
     if not tasks:
@@ -75,10 +90,16 @@ async def search_tasks(
 
 # GET ЗАДАЧИ, срок которых истекает сегодня
 @router.get("/today", response_model=List[TaskResponse])
-async def get_tasks_due_today(db: AsyncSession = Depends(get_async_session)):
+async def get_tasks_due_today(
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
+):
     """Возвращает задачи, у которых дедлайн — сегодня (по дате)."""
     today = date.today()
-    result = await db.execute(select(Task).where(func.date(Task.deadline_at) == today))
+    stmt = select(Task).where(func.date(Task.deadline_at) == today)
+    if current_user.role != UserRole.ADMIN:
+        stmt = stmt.where(Task.user_id == current_user.id)
+    result = await db.execute(stmt)
     tasks = result.scalars().all()
     return [task_to_response(task) for task in tasks]
 
@@ -86,13 +107,17 @@ async def get_tasks_due_today(db: AsyncSession = Depends(get_async_session)):
 @router.get("/status/{status}", response_model=List[TaskResponse])
 async def get_tasks_by_status(
     status: str,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     if status not in ["completed", "pending"]:
         raise HTTPException(status_code=400, detail="Недопустимый статус. Используйте: completed или pending")
     
     is_completed = (status == "completed")
-    result = await db.execute(select(Task).where(Task.completed == is_completed))
+    stmt = select(Task).where(Task.completed == is_completed)
+    if current_user.role != UserRole.ADMIN:
+        stmt = stmt.where(Task.user_id == current_user.id)
+    result = await db.execute(stmt)
     tasks = result.scalars().all()
     return [task_to_response(task) for task in tasks]
 
@@ -100,14 +125,17 @@ async def get_tasks_by_status(
 @router.get("/{task_id}", response_model=TaskResponse)
 async def get_task_by_id(
     task_id: int,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
 
-
-
     if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    # Если не админ — вернуть только если задача принадлежит текущему пользователю
+    if current_user.role != UserRole.ADMIN and task.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     return task_to_response(task)
@@ -116,7 +144,8 @@ async def get_task_by_id(
 @router.post("/", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 async def create_task(
     task: TaskCreate,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     # Определяем квадрант на основе важности и дедлайна
     quadrant = determine_quadrant(task.is_important, task.deadline_at)
@@ -130,7 +159,8 @@ async def create_task(
         is_urgent=is_urgent,
         deadline_at=task.deadline_at,
         quadrant=quadrant,
-        completed=False
+        completed=False,
+        user_id=current_user.id,
     )
     
     db.add(new_task)
@@ -144,7 +174,8 @@ async def create_task(
 async def update_task(
     task_id: int,
     task_update: TaskUpdate,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     # Находим задачу
     result = await db.execute(select(Task).where(Task.id == task_id))
@@ -153,12 +184,11 @@ async def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
-
-
+    if current_user.role != UserRole.ADMIN and task.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
 
     # Обновляем только переданные поля
     update_data = task_update.model_dump(exclude_unset=True)
-
 
     for field, value in update_data.items():
         setattr(task, field, value)
@@ -167,9 +197,6 @@ async def update_task(
     if "is_important" in update_data or "deadline_at" in update_data:
         task.quadrant = determine_quadrant(task.is_important, task.deadline_at)
         task.is_urgent = calculate_urgency(task.deadline_at)
-
-
-
 
     await db.commit()
     await db.refresh(task)
@@ -180,7 +207,8 @@ async def update_task(
 @router.patch("/{task_id}/complete", response_model=TaskResponse)
 async def complete_task(
     task_id: int,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
@@ -188,9 +216,11 @@ async def complete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
+    if current_user.role != UserRole.ADMIN and task.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
     task.completed = True
     task.completed_at = datetime.now()
-
 
     await db.commit()
     await db.refresh(task)
@@ -201,12 +231,17 @@ async def complete_task(
 @router.delete("/{task_id}", status_code=status.HTTP_200_OK)
 async def delete_task(
     task_id: int,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    if current_user.role != UserRole.ADMIN and task.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
     await db.delete(task)
     await db.commit()
 
