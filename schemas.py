@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from typing import Optional
 from datetime import datetime
 
@@ -19,9 +19,9 @@ class TaskBase(BaseModel):
         ...,
         description="Важность задачи"
     )
-    is_urgent: bool = Field(
+    deadline_at: datetime = Field(
         ...,
-        description="Срочность задачи"
+        description="Плановый дедлайн задачи"
     )
 
 # Схема для создания новой задачи
@@ -45,9 +45,9 @@ class TaskUpdate(BaseModel):
         None,
         description="Новая важность"
     )
-    is_urgent: Optional[bool] = Field(
+    deadline_at: Optional[datetime] = Field(
         None,
-        description="Новая срочность"
+        description="Новый плановый дедлайн"
     )
     completed: Optional[bool] = Field(
         None,
@@ -74,6 +74,13 @@ class TaskResponse(TaskBase):
         ...,
         description="Дата и время создания задачи"
     )
+    
+    @computed_field(return_type=int)
+    def days_to_deadline(self) -> int:
+        """Расчет количества дней от сегодняшней даты до дедлайна."""
+        now = datetime.now(self.deadline_at.tzinfo) if self.deadline_at.tzinfo else datetime.now()
+        delta = self.deadline_at.date() - now.date()
+        return delta.days
     
     class Config:
         from_attributes = True
